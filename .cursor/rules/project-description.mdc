@@ -1,0 +1,57 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Create a new full-stack application for SF government document analysis with the following structure:
+
+1. INITIAL PROJECT SETUP:
+   - Create a new directory structure with /backend and /frontend folders
+   - Backend: Set up FastAPI project with Poetry for dependency management
+   - Frontend: Create Next.js 14 project with TypeScript and Tailwind CSS
+   - Add Docker Compose file for local development with PostgreSQL, Redis, and MinIO
+
+2. BACKEND CORE STRUCTURE:
+   - Install dependencies: fastapi, langchain, langgraph, celery, sqlalchemy, alembic, boto3, beautifulsoup4, selenium, requests, pydantic
+   - Create models for: Document, Analysis, AnalysisTemplate, Source
+   - Set up database with Alembic migrations
+   - Create base API structure with routers for: documents, analysis, sources, templates
+
+3. DOCUMENT INGESTION SYSTEM:
+   - Create a scraper service for sfbos.org that can detect new meeting documents
+   - Implement document storage service using S3-compatible storage
+   - Set up Celery tasks for background document processing
+   - Add scheduling with Celery Beat for regular document checks
+
+4. LANGGRAPH ANALYSIS PIPELINE:
+   - Create LangGraph workflow for document analysis with nodes for: document_preprocessing, content_extraction, analysis_generation, results_storage
+   - Make LLM provider configurable (OpenAI, Anthropic, etc.)
+   - Implement analysis template system for different prompt types
+   - Add support for chaining multiple analysis steps
+
+5. API ENDPOINTS:
+   - GET/POST /api/documents - list and trigger document ingestion
+   - GET/POST /api/analysis - view and create analysis jobs
+   - GET/POST /api/templates - manage analysis prompt templates
+   - GET /api/sources - manage data sources configuration
+   - WebSocket endpoint for real-time analysis status updates
+
+6. FRONTEND DASHBOARD:
+   - Create dashboard layout with sidebar navigation
+   - Build pages for: Document Library, Analysis Results, Template Management, System Status
+   - Implement document viewer component for PDF/HTML display
+   - Add analysis results visualization with charts
+   - Create forms for managing analysis templates and data sources
+
+7. CONFIGURATION & ENVIRONMENT:
+   - Set up environment variables for: database URL, S3 credentials, LLM API keys, scraping intervals
+   - Create configuration classes for different environments (dev, staging, prod)
+   - Add logging and error tracking setup
+
+8. TESTING & DEPLOYMENT:
+   - Write unit tests for core scraping and analysis functions
+   - Create integration tests for the API endpoints
+   - Set up GitHub Actions for CI/CD
+   - Add deployment configuration for Railway or similar platform
+
+Make the system modular so new data sources can be easily added by creating new scraper classes that inherit from a base scraper interface. Use dependency injection throughout to make components easily testable and swappable.
