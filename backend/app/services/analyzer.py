@@ -55,9 +55,8 @@ class DocumentAnalyzer:
                 return False
             
             # Prepare the prompt
-            prompt = custom_prompt if custom_prompt else settings.analysis_prompt
-            if not prompt:
-                prompt = self._get_default_prompt()
+            from ..config import get_custom_prompt
+            prompt = custom_prompt if custom_prompt else get_custom_prompt()
             
             # Create the full prompt with document content
             full_prompt = f"""

@@ -136,6 +136,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Custom prompts (contains sensitive analysis instructions)
+prompts.txt
+backend/prompts.txt
+
 # Spyder project settings
 .spyderproject
 .spyproject

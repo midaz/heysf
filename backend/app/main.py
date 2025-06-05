@@ -55,6 +55,7 @@ def root():
     }
 
 
+
 @app.get("/health", response_model=HealthResponse)
 def health_check(db: Session = Depends(get_db)):
     """
