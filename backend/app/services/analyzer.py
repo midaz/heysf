@@ -21,7 +21,7 @@ class DocumentAnalyzer:
     def __init__(self):
         self.llm = ChatOpenAI(
             api_key=settings.openai_api_key,
-            model="gpt-4",
+            model="gpt-4o-mini",  # Higher token limits (200K TPM) and much cheaper
             temperature=0.1  # Low temperature for consistent analysis
         )
         self.storage_service = S3StorageService()
@@ -58,11 +58,28 @@ class DocumentAnalyzer:
             from ..config import get_custom_prompt
             prompt = custom_prompt if custom_prompt else get_custom_prompt()
             
-            # Handle large documents by chunking if necessary
-            analysis_content = self._analyze_content_with_chunking(content, prompt)
+            # Create the analysis prompt with document content
+            full_prompt = f"""
+{prompt}
+
+Please analyze the following SF Board of Supervisors meeting minutes:
+
+{content}
+"""
             
-            if not analysis_content:
-                logger.error(f"Analysis failed for document: {document.title}")
+            # Perform analysis with GPT-4o-mini (high token limits, no chunking needed)
+            try:
+                response = self.llm.invoke([HumanMessage(content=full_prompt)])
+                analysis_content = response.content
+                
+                if not analysis_content:
+                    logger.error(f"Analysis returned empty content for document: {document.title}")
+                    document.status = DocumentStatus.ERROR
+                    db.commit()
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"Error during LLM analysis for document {document.title}: {e}")
                 document.status = DocumentStatus.ERROR
                 db.commit()
                 return False
@@ -115,128 +132,6 @@ class DocumentAnalyzer:
                 # Note: We don't commit here as this is called from within another transaction
         
         return content
-    
-    def _analyze_content_with_chunking(self, content: str, prompt: str) -> Optional[str]:
-        """
-        Analyze content, handling large documents by chunking if necessary.
-        
-        Args:
-            content: Document content to analyze
-            prompt: Analysis prompt to use
-            
-        Returns:
-            Analysis result or None if failed
-        """
-        # Estimate token count (rough approximation: 4 chars per token)
-        estimated_tokens = len(content) // 4 + len(prompt) // 4 + 500  # +500 for response buffer
-        
-        # If within limits, analyze directly
-        if estimated_tokens <= 8000:  # Keep buffer under 10K limit
-            try:
-                full_prompt = f"""
-{prompt}
-
-Please analyze the following SF Board of Supervisors meeting minutes:
-
-{content}
-"""
-                response = self.llm.invoke([HumanMessage(content=full_prompt)])
-                return response.content
-            except Exception as e:
-                logger.error(f"Error in direct analysis: {e}")
-                return None
-        
-        # For large documents, summarize first then analyze
-        logger.info("Document is large, using two-stage analysis")
-        
-        try:
-            # Stage 1: Summarize the content
-            summary_prompt = """
-Summarize this SF Board of Supervisors meeting minutes, focusing on:
-- Key decisions and votes
-- Major agenda items discussed  
-- Action items and deadlines
-- Financial items and budget decisions
-- Public comments themes
-
-Keep the summary comprehensive but under 1500 words.
-
-Document to summarize:
-"""
-            
-            # Chunk the content for summarization
-            chunks = self._chunk_content(content, max_chars=20000)  # Smaller chunks for summarization
-            chunk_summaries = []
-            
-            for i, chunk in enumerate(chunks):
-                chunk_prompt = f"{summary_prompt}\n\nPart {i+1} of {len(chunks)}:\n{chunk}"
-                try:
-                    response = self.llm.invoke([HumanMessage(content=chunk_prompt)])
-                    chunk_summaries.append(response.content)
-                except Exception as e:
-                    logger.warning(f"Failed to summarize chunk {i+1}: {e}")
-                    continue
-            
-            if not chunk_summaries:
-                logger.error("Failed to summarize any chunks")
-                return None
-            
-            # Combine summaries
-            combined_summary = "\n\n".join(chunk_summaries)
-            
-            # Stage 2: Analyze the summary using the original prompt
-            final_prompt = f"""
-{prompt}
-
-Based on the following comprehensive summary of SF Board of Supervisors meeting minutes:
-
-{combined_summary}
-"""
-            
-            response = self.llm.invoke([HumanMessage(content=final_prompt)])
-            return response.content
-            
-        except Exception as e:
-            logger.error(f"Error in chunked analysis: {e}")
-            return None
-    
-    def _chunk_content(self, content: str, max_chars: int = 20000) -> list[str]:
-        """
-        Split content into chunks that fit within token limits.
-        
-        Args:
-            content: Content to chunk
-            max_chars: Maximum characters per chunk
-            
-        Returns:
-            List of content chunks
-        """
-        if len(content) <= max_chars:
-            return [content]
-        
-        chunks = []
-        current_pos = 0
-        
-        while current_pos < len(content):
-            end_pos = current_pos + max_chars
-            
-            # If this isn't the last chunk, try to break at a sentence or paragraph
-            if end_pos < len(content):
-                # Look for paragraph break first
-                break_pos = content.rfind('\n\n', current_pos, end_pos)
-                if break_pos == -1:
-                    # Look for sentence break
-                    break_pos = content.rfind('. ', current_pos, end_pos)
-                    if break_pos != -1:
-                        break_pos += 2  # Include the period and space
-                
-                if break_pos != -1 and break_pos > current_pos:
-                    end_pos = break_pos
-            
-            chunks.append(content[current_pos:end_pos])
-            current_pos = end_pos
-        
-        return chunks
     
     def _get_default_prompt(self) -> str:
         """
