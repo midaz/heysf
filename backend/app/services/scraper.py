@@ -39,8 +39,23 @@ class SFBOSScraper:
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Find the meetings table
-            meetings_table = soup.find('table') or soup.find('div', class_='meetings-table')
+            # Find the meetings table - look for table containing "Minutes" header
+            meetings_table = None
+            tables = soup.find_all('table')
+            
+            for table in tables:
+                # Check if this table has a "Minutes" column header
+                header_row = table.find('tr')
+                if header_row:
+                    headers = [th.get_text(strip=True) for th in header_row.find_all(['th', 'td'])]
+                    if any('Minutes' in header for header in headers):
+                        meetings_table = table
+                        break
+            
+            # Fallback to first table if no specific table found
+            if not meetings_table and tables:
+                meetings_table = tables[0]
+            
             if not meetings_table:
                 logger.error("Could not find meetings table on the page")
                 return []
@@ -52,26 +67,42 @@ class SFBOSScraper:
             
             for row in rows:
                 cells = row.find_all('td')
-                if len(cells) >= 3:  # Date, Agenda, Minutes, Supporting Docs
+                if len(cells) >= 3:  # Need at least Date, Agenda, Minutes columns
                     date_cell = cells[0]
-                    minutes_cell = cells[2] if len(cells) > 2 else None
                     
-                    if minutes_cell:
-                        minutes_link = minutes_cell.find('a')
+                    # Find the Minutes column - it should be the 3rd column (index 2)
+                    # But let's be defensive and check all cells for "Minutes" links
+                    minutes_link = None
+                    minutes_url = None
+                    
+                    # First try the expected column (index 2)
+                    if len(cells) > 2:
+                        minutes_link = cells[2].find('a')
                         if minutes_link and minutes_link.get('href'):
-                            # Extract meeting date and title
-                            date_text = date_cell.get_text(strip=True)
                             minutes_url = minutes_link.get('href')
-                            
-                            # Make URL absolute if relative
-                            if minutes_url.startswith('/'):
-                                minutes_url = f"{self.base_url}{minutes_url}"
-                            
-                            documents.append({
-                                'title': f"Board Meeting Minutes - {date_text}",
-                                'url': minutes_url,
-                                'date': date_text
-                            })
+                    
+                    # If not found, search all cells for a link containing "minutes"
+                    if not minutes_url:
+                        for cell in cells:
+                            link = cell.find('a')
+                            if link and link.get('href') and 'minutes' in link.get('href').lower():
+                                minutes_link = link
+                                minutes_url = link.get('href')
+                                break
+                    
+                    if minutes_url:
+                        # Extract meeting date and title
+                        date_text = date_cell.get_text(strip=True)
+                        
+                        # Make URL absolute if relative
+                        if minutes_url.startswith('/'):
+                            minutes_url = f"{self.base_url}{minutes_url}"
+                        
+                        documents.append({
+                            'title': f"Board Meeting Minutes - {date_text}",
+                            'url': minutes_url,
+                            'date': date_text
+                        })
             
             logger.info(f"Found {len(documents)} meeting minutes documents")
             return documents
@@ -85,7 +116,7 @@ class SFBOSScraper:
     
     def download_document_content(self, url: str) -> Optional[str]:
         """
-        Download the content of a document (HTML page).
+        Download and extract text content from documents (HTML or PDF).
         
         Args:
             url: URL of the document to download
@@ -97,8 +128,76 @@ class SFBOSScraper:
             response = self.session.get(url)
             response.raise_for_status()
             
-            # For HTML documents, extract the main content
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # Check content type to determine processing method
+            content_type = response.headers.get('content-type', '').lower()
+            
+            if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
+                # Handle PDF documents
+                return self._extract_pdf_text(response.content)
+            else:
+                # Handle HTML documents
+                return self._extract_html_text(response.content)
+                
+        except requests.RequestException as e:
+            logger.error(f"Error downloading document from {url}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error processing document content from {url}: {e}")
+            return None
+    
+    def _extract_pdf_text(self, pdf_content: bytes) -> Optional[str]:
+        """
+        Extract text content from PDF bytes.
+        
+        Args:
+            pdf_content: Raw PDF content as bytes
+            
+        Returns:
+            Extracted text or None if failed
+        """
+        try:
+            import io
+            from PyPDF2 import PdfReader
+            
+            # Create a BytesIO object from the PDF content
+            pdf_file = io.BytesIO(pdf_content)
+            
+            # Read the PDF
+            reader = PdfReader(pdf_file)
+            
+            # Extract text from all pages
+            text_content = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text.strip():  # Only add non-empty pages
+                    text_content.append(page_text)
+            
+            extracted_text = '\n\n'.join(text_content)
+            
+            if extracted_text.strip():
+                logger.info(f"Successfully extracted {len(extracted_text)} characters from PDF")
+                return extracted_text
+            else:
+                logger.warning("PDF text extraction resulted in empty content")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error extracting text from PDF: {e}")
+            return None
+    
+    def _extract_html_text(self, html_content: bytes) -> Optional[str]:
+        """
+        Extract text content from HTML bytes.
+        
+        Args:
+            html_content: Raw HTML content as bytes
+            
+        Returns:
+            Extracted text or None if failed
+        """
+        try:
+            # Parse HTML content
+            soup = BeautifulSoup(html_content, 'html.parser')
             
             # Remove navigation, scripts, and other non-content elements
             for element in soup(['nav', 'script', 'style', 'header', 'footer']):
@@ -117,11 +216,8 @@ class SFBOSScraper:
             else:
                 return soup.get_text(separator='\n', strip=True)
                 
-        except requests.RequestException as e:
-            logger.error(f"Error downloading document from {url}: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Error processing document content from {url}: {e}")
+            logger.error(f"Error extracting text from HTML: {e}")
             return None
     
     def check_for_new_documents(self, db: Session) -> List[Document]:
